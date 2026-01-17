@@ -15,6 +15,14 @@ def get_env_settings():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     hr_chat_id = os.environ.get("HR_CHAT_ID")
     firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS")
+    firebase_creds_file = os.environ.get("FIREBASE_CREDENTIALS_FILE")
+    if not firebase_creds_json and firebase_creds_file:
+        try:
+            with open(firebase_creds_file, "r", encoding="utf-8") as f:
+                firebase_creds_json = f.read()
+        except Exception as e:
+            print(f"XATO: FIREBASE_CREDENTIALS_FILE o'qilmadi: {e}")
+            sys.exit(1)
     
     if not token:
         print("XATO: TELEGRAM_BOT_TOKEN topilmadi")
@@ -23,7 +31,7 @@ def get_env_settings():
         print("XATO: HR_CHAT_ID topilmadi")
         sys.exit(1)
     if not firebase_creds_json:
-        print("XATO: FIREBASE_CREDENTIALS topilmadi")
+        print("XATO: FIREBASE_CREDENTIALS yoki FIREBASE_CREDENTIALS_FILE topilmadi")
         sys.exit(1)
         
     return token, hr_chat_id, firebase_creds_json
