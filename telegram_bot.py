@@ -104,21 +104,62 @@ def is_valid_phone(text):
 class BotLogic:
     def __init__(self):
         self.states = {} # user_id -> {step, data}
+        self.lang = {}
         self.positions = [
             ["Matematika o'qituvchisi", "Ingliz tili o'qituvchisi"],
             ["Ona tili va adabiyot", "Fizika o'qituvchisi"],
             ["Boshlang'ich sinf", "Administrator"],
             ["Boshqa lavozim"]
         ]
-        self.main_menu = {
+        self.labels = {
+            "menu_about": {"uz": "🏫 Biz haqimizda", "en": "🏫 About us", "ru": "🏫 О нас"},
+            "menu_contact": {"uz": "💬 Biz bilan bog'lanish", "en": "💬 Contact us", "ru": "💬 Связаться"},
+            "menu_hr": {"uz": "HR amaliyoti", "en": "HR practice", "ru": "HR практика"},
+            "menu_jobs": {"uz": "💼 Bo'sh ish o'rinlari", "en": "💼 Job vacancies", "ru": "💼 Вакансии"},
+            "menu_talent": {"uz": "💼 Iste'dodlar zaxirasi", "en": "💼 Talent pool", "ru": "💼 Кадровый резерв"},
+            "menu_lang": {"uz": "🌐 Tilni almashtirish", "en": "🌐 Change language", "ru": "🌐 Сменить язык"},
+            "back": {"uz": "⬅️ Orqaga", "en": "⬅️ Back", "ru": "⬅️ Назад"},
+            "cancel": {"uz": "❌ Bekor qilish", "en": "❌ Cancel", "ru": "❌ Отмена"},
+            "skip": {"uz": "O'tkazib yuborish", "en": "Skip", "ru": "Пропустить"},
+            "send_contact": {"uz": "Kontaktni yuborish", "en": "Send contact", "ru": "Отправить контакт"},
+            "lang_uz": {"uz": "🇺🇿 UZ", "en": "🇺🇿 UZ", "ru": "🇺🇿 UZ"},
+            "lang_en": {"uz": "🇬🇧 ENG", "en": "🇬🇧 ENG", "ru": "🇬🇧 ENG"},
+            "lang_ru": {"uz": "🇷🇺 RUS", "en": "🇷🇺 RUS", "ru": "🇷🇺 RUS"},
+        }
+
+    def _lang(self, user_id):
+        return self.lang.get(user_id, "uz")
+
+    def _label(self, key, lang):
+        return self.labels.get(key, {}).get(lang) or self.labels.get(key, {}).get("uz") or key
+
+    def _main_menu(self, lang):
+        return {
             "keyboard": [
-                [{"text": "🏆 Grant - 2026"}],
-                [{"text": "🗓️ Qabul - 2026"}, {"text": "ℹ️ Umumiy ma'lumot"}],
-                [{"text": "📍 Manzilimiz"}],
-                [{"text": "💼 Bo'sh ish o'rinlari"}, {"text": "📞 Biz bilan bog'lanish"}]
+                [{"text": self._label("menu_about", lang)}, {"text": self._label("menu_contact", lang)}],
+                [{"text": self._label("menu_hr", lang)}],
+                [{"text": self._label("menu_jobs", lang)}],
+                [{"text": self._label("menu_talent", lang)}],
+                [{"text": self._label("menu_lang", lang)}],
             ],
             "resize_keyboard": True
         }
+
+    def _lang_menu(self, lang):
+        return {
+            "keyboard": [
+                [{"text": self._label("lang_uz", lang)}, {"text": self._label("lang_en", lang)}, {"text": self._label("lang_ru", lang)}],
+                [{"text": self._label("back", lang)}],
+            ],
+            "resize_keyboard": True
+        }
+
+    def _action_from_text(self, text):
+        for action_key in ["menu_about", "menu_contact", "menu_hr", "menu_jobs", "menu_talent", "menu_lang", "back", "cancel", "skip", "send_contact", "lang_uz", "lang_en", "lang_ru"]:
+            labels = self.labels.get(action_key, {})
+            if text in labels.values():
+                return action_key
+        return None
 
     def handle_update(self, update):
         message = update.get("message")
@@ -128,85 +169,80 @@ class BotLogic:
         user_id = message["from"]["id"]
         text = message.get("text", "")
         contact = message.get("contact")
+        lang = self._lang(user_id)
 
-        # Komandalar
-        if text == "/start" or text == "🏠 Asosiy menyu":
+        if text == "/start":
+            if user_id not in self.lang:
+                self.lang[user_id] = "uz"
+                lang = "uz"
             self.states[user_id] = None
-            send_msg(chat_id, "<b>Assalomu alaykum!</b>\n\nAl-Xorazmiy xususiy maktabining rasmiy botiga xush kelibsiz. Kerakli bo'limni tanlang:", self.main_menu)
+            send_msg(chat_id, "<b>Assalomu alaykum!</b>\n\nKerakli bo'limni tanlang:", self._main_menu(lang))
+            return
+        
+        action = self._action_from_text(text)
+
+        if action == "menu_lang":
+            send_msg(chat_id, "Tilni tanlang:", self._lang_menu(lang))
+            return
+
+        if action in ["lang_uz", "lang_en", "lang_ru"]:
+            new_lang = "uz" if action == "lang_uz" else ("en" if action == "lang_en" else "ru")
+            self.lang[user_id] = new_lang
+            lang = new_lang
+            send_msg(chat_id, "✅ Til o'zgartirildi.", self._main_menu(lang))
+            return
+
+        if action == "back":
+            send_msg(chat_id, "Menu:", self._main_menu(lang))
             return
 
         # Asosiy Menyu tugmalarini qayta ishlash
         if not self.states.get(user_id):
-            if text == "🏆 Grant - 2026":
+            if action == "menu_about":
                 msg = (
-                    "<b>🏆 Grant - 2026 dasturi</b>\n\n"
-                    "Iqtidorli o'quvchilarni qo'llab-quvvatlash maqsadida maktabimiz har yili grantlar ajratadi.\n"
-                    "Grantlar o'quvchilarning kirish imtihonlaridagi natijalariga ko'ra beriladi.\n\n"
-                    "Batafsil ma'lumot uchun: @u_gafforov"
+                    "<b>Biz haqimizda</b>\n\n"
+                    "Al-Xorazmiy xususiy maktabi zamonaviy ta'lim va tarbiya uyg'unligini ta'minlaydi."
                 )
-                send_msg(chat_id, msg, self.main_menu)
-                return
-            
-            elif text == "🗓️ Qabul - 2026":
-                msg = (
-                    "<b>🗓️ 2026-2027 o'quv yili uchun qabul</b>\n\n"
-                    "Qabul jarayonlari quyidagi bosqichlardan iborat:\n"
-                    "1. Onlayn ro'yxatdan o'tish\n"
-                    "2. Kirish imtihonlari (Matematika, Mantiq, Ingliz tili)\n"
-                    "3. Psixologik suhbat\n\n"
-                    "Hozirda 1-11 sinflar uchun qabul davom etmoqda."
-                )
-                send_msg(chat_id, msg, self.main_menu)
+                send_msg(chat_id, msg, self._main_menu(lang))
                 return
 
-            elif text == "ℹ️ Umumiy ma'lumot":
+            if action == "menu_contact":
                 msg = (
-                    "<b>Maktab haqida umumiy ma'lumot</b>\n\n"
-                    "Al-Xorazmiy xususiy maktabi zamonaviy ta'lim texnologiyalari va milliy qadriyatlar uyg'unligini ta'minlaydi.\n"
-                    "Bizning afzalliklarimiz:\n"
-                    "- Chuqurlashtirilgan IT va Matematika\n"
-                    "- Ingliz tilini intensiv o'rganish\n"
-                    "- Shaxmat va robototexnika to'garaklari\n"
-                    "- 3 mahal issiq ovqat va transport xizmati"
-                )
-                send_msg(chat_id, msg, self.main_menu)
-                return
-
-            elif text == "📍 Manzilimiz":
-                msg = (
-                    "<b>📍 Bizning manzil:</b>\n\n"
-                    "Toshkent shahri, Yunusobod tumani, XXX ko'chasi, XX-uy.\n"
-                    "Mo'ljal: XXXXXXXXXX\n\n"
-                    "Ish vaqti: 09:00 - 18:00 (Dush-Shan)"
-                )
-                # Google Maps linkini ham qo'shish mumkin
-                send_msg(chat_id, msg, self.main_menu)
-                return
-
-            elif text == "📞 Biz bilan bog'lanish":
-                msg = (
-                    "<b>📞 Aloqa markazi:</b>\n\n"
+                    "<b>Biz bilan bog'lanish</b>\n\n"
                     "Telefon: +998 90 XXX XX XX\n"
                     "Telegram: @u_gafforov\n"
                     "Email: info@alxorazmiy.uz"
                 )
-                send_msg(chat_id, msg, self.main_menu)
+                send_msg(chat_id, msg, self._main_menu(lang))
                 return
 
-            elif text == "💼 Bo'sh ish o'rinlari":
-                self.states[user_id] = {"step": "name", "data": {}}
-                send_msg(chat_id, "<b>Ishga qabul bo'limi</b>\n\nIltimos, ism va familiyangizni kiriting:", {"remove_keyboard": True})
+            if action == "menu_hr":
+                msg = (
+                    "<b>HR amaliyoti</b>\n\n"
+                    "Bu bo'lim orqali bo'sh ish o'rinlariga ariza topshirishingiz yoki iste'dodlar zaxirasiga qo'shilishingiz mumkin."
+                )
+                send_msg(chat_id, msg, self._main_menu(lang))
+                return
+
+            if action == "menu_jobs":
+                self.states[user_id] = {"step": "name", "data": {}, "mode": "job"}
+                send_msg(chat_id, "<b>Bo'sh ish o'rinlari</b>\n\nIltimos, ism va familiyangizni kiriting:", {"remove_keyboard": True})
+                return
+
+            if action == "menu_talent":
+                self.states[user_id] = {"step": "name", "data": {"position": "Iste'dodlar zaxirasi"}, "mode": "talent"}
+                send_msg(chat_id, "<b>Iste'dodlar zaxirasi</b>\n\nIltimos, ism va familiyangizni kiriting:", {"remove_keyboard": True})
                 return
 
         # Ariza topshirish flow'i (states mavjud bo'lsa)
         state = self.states.get(user_id)
         if not state:
-            send_msg(chat_id, "Iltimos, pastdagi menyudan birini tanlang.", self.main_menu)
+            send_msg(chat_id, "Iltimos, pastdagi menyudan birini tanlang.", self._main_menu(lang))
             return
 
-        if text == "❌ Bekor qilish":
+        if action == "cancel":
             self.states[user_id] = None
-            send_msg(chat_id, "Ariza topshirish bekor qilindi.", self.main_menu)
+            send_msg(chat_id, "Ariza topshirish bekor qilindi.", self._main_menu(lang))
             return
 
         step = state["step"]
@@ -217,15 +253,15 @@ class BotLogic:
                 state["step"] = "phone"
                 markup = {
                     "keyboard": [
-                        [{"text": "Kontaktni yuborish", "request_contact": True}],
-                        [{"text": "❌ Bekor qilish"}]
+                        [{"text": self._label("send_contact", lang), "request_contact": True}],
+                        [{"text": self._label("cancel", lang)}]
                     ],
                     "resize_keyboard": True,
                     "one_time_keyboard": True
                 }
                 send_msg(chat_id, "Telefon raqamingizni yuboring (tugmani bosing):", markup)
             else:
-                send_msg(chat_id, "Iltimos, ism va familiyangizni to'liq yozing (Masalan: Ali Valiyev):\n\nBekor qilish uchun '❌ Bekor qilish' tugmasini bosing.")
+                send_msg(chat_id, f"Iltimos, ism va familiyangizni to'liq yozing (Masalan: Ali Valiyev):\n\nBekor qilish uchun '{self._label('cancel', lang)}' tugmasini bosing.")
         
         elif step == "phone":
             phone_val = None
@@ -236,14 +272,22 @@ class BotLogic:
 
             if phone_val:
                 state["data"]["phone"] = phone_val
-                state["step"] = "position"
-                kb = [[{"text": p} for p in row] for row in self.positions]
-                kb.append([{"text": "❌ Bekor qilish"}])
-                markup = {
-                    "keyboard": kb,
-                    "resize_keyboard": True
-                }
-                send_msg(chat_id, "Qaysi lavozimga topshirmoqchisiz? (Ro'yxatdan tanlang yoki yozing):", markup)
+                if state.get("mode") == "talent":
+                    state["step"] = "exp"
+                    markup = {
+                        "keyboard": [[{"text": self._label("cancel", lang)}]],
+                        "resize_keyboard": True
+                    }
+                    send_msg(chat_id, "Ish tajribangiz haqida qisqacha ma'lumot bering:", markup)
+                else:
+                    state["step"] = "position"
+                    kb = [[{"text": p} for p in row] for row in self.positions]
+                    kb.append([{"text": self._label("cancel", lang)}])
+                    markup = {
+                        "keyboard": kb,
+                        "resize_keyboard": True
+                    }
+                    send_msg(chat_id, "Qaysi lavozimga topshirmoqchisiz? (Ro'yxatdan tanlang yoki yozing):", markup)
             else:
                 send_msg(chat_id, "Iltimos, telefon raqamingizni tugma orqali yuboring yoki yozing:")
 
@@ -252,7 +296,7 @@ class BotLogic:
                 state["data"]["position"] = text
                 state["step"] = "exp"
                 markup = {
-                    "keyboard": [[{"text": "❌ Bekor qilish"}]],
+                    "keyboard": [[{"text": self._label("cancel", lang)}]],
                     "resize_keyboard": True
                 }
                 send_msg(chat_id, "Ish tajribangiz haqida qisqacha ma'lumot bering:", markup)
@@ -265,8 +309,8 @@ class BotLogic:
                 state["step"] = "cv"
                 markup = {
                     "keyboard": [
-                        [{"text": "O'tkazib yuborish"}],
-                        [{"text": "❌ Bekor qilish"}]
+                        [{"text": self._label("skip", lang)}],
+                        [{"text": self._label("cancel", lang)}]
                     ],
                     "resize_keyboard": True,
                     "one_time_keyboard": True
@@ -285,7 +329,7 @@ class BotLogic:
             elif message.get("photo"):
                 cv_file_id = message["photo"][-1]["file_id"]
                 cv_type = "photo"
-            elif text in ["O'tkazib yuborish", "/skip"]:
+            elif action == "skip" or text == "/skip":
                 pass
             else:
                 send_msg(chat_id, "Iltimos, fayl yuboring yoki tugmani bosing.")
@@ -293,7 +337,7 @@ class BotLogic:
 
             # Firebase va HR ga yuborish
             self.finish_and_send(user_id, state["data"], cv_file_id, cv_type)
-            send_msg(chat_id, "✅ <b>Rahmat!</b> Arizangiz HR bo'limiga yuborildi.", self.main_menu)
+            send_msg(chat_id, "✅ <b>Rahmat!</b> Arizangiz HR bo'limiga yuborildi.", self._main_menu(lang))
             del self.states[user_id]
 
     def finish_and_send(self, user_id, data, file_id, f_type):
