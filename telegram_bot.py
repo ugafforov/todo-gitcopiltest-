@@ -171,7 +171,7 @@ class BotLogic:
         contact = message.get("contact")
         lang = self._lang(user_id)
 
-        if text == "/start":
+        if text in ["/start", "/menu"] or (isinstance(text, str) and text.startswith("/menu")) or text == "Menu":
             if user_id not in self.lang:
                 self.lang[user_id] = "uz"
                 lang = "uz"
