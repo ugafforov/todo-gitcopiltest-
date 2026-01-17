@@ -100,6 +100,12 @@ def is_valid_phone(text):
 class BotLogic:
     def __init__(self):
         self.states = {} # user_id -> {step, data}
+        self.positions = [
+            ["Matematika o'qituvchisi", "Ingliz tili o'qituvchisi"],
+            ["Ona tili va adabiyot", "Fizika o'qituvchisi"],
+            ["Boshlang'ich sinf", "Administrator"],
+            ["Boshqa lavozim"]
+        ]
 
     def handle_update(self, update):
         message = update.get("message")
@@ -108,16 +114,26 @@ class BotLogic:
         chat_id = message["chat"]["id"]
         user_id = message["from"]["id"]
         text = message.get("text", "")
+        contact = message.get("contact")
 
         # Komandalar
         if text == "/start":
             self.states[user_id] = {"step": "name", "data": {}}
-            send_msg(chat_id, "<b>Assalomu alaykum!</b>\n\nIshga qabul botiga xush kelibsiz. Iltimos, ism va familiyangizni kiriting:")
+            markup = {
+                "keyboard": [[{"text": "Ariza topshirish"}]],
+                "resize_keyboard": True,
+                "one_time_keyboard": True
+            }
+            send_msg(chat_id, "<b>Assalomu alaykum!</b>\n\nAl-Xorazmiy xususiy maktabiga ishga qabul botiga xush kelibsiz.\n\nAriza topshirishni boshlash uchun pastdagi tugmani bosing:", markup)
             return
 
         state = self.states.get(user_id)
         if not state:
-            send_msg(chat_id, "Iltimos, ariza boshlash uchun /start bosing.")
+            if text == "Ariza topshirish":
+                self.states[user_id] = {"step": "name", "data": {}}
+                send_msg(chat_id, "Iltimos, ism va familiyangizni kiriting:", {"remove_keyboard": True})
+            else:
+                send_msg(chat_id, "Iltimos, ariza boshlash uchun /start bosing.")
             return
 
         step = state["step"]
@@ -126,23 +142,38 @@ class BotLogic:
             if is_valid_name(text):
                 state["data"]["name"] = text
                 state["step"] = "phone"
-                send_msg(chat_id, "Telefon raqamingizni yuboring:")
+                markup = {
+                    "keyboard": [[{"text": "Kontaktni yuborish", "request_contact": True}]],
+                    "resize_keyboard": True,
+                    "one_time_keyboard": True
+                }
+                send_msg(chat_id, "Telefon raqamingizni yuboring (tugmani bosing):", markup)
             else:
                 send_msg(chat_id, "Iltimos, ism va familiyangizni to'liq yozing (Masalan: Ali Valiyev):")
         
         elif step == "phone":
-            if is_valid_phone(text):
-                state["data"]["phone"] = text
+            phone_val = None
+            if contact:
+                phone_val = contact.get("phone_number")
+            elif is_valid_phone(text):
+                phone_val = text
+
+            if phone_val:
+                state["data"]["phone"] = phone_val
                 state["step"] = "position"
-                send_msg(chat_id, "Qaysi lavozimga topshirmoqchisiz?")
+                markup = {
+                    "keyboard": [[{"text": p} for p in row] for row in self.positions],
+                    "resize_keyboard": True
+                }
+                send_msg(chat_id, "Qaysi lavozimga topshirmoqchisiz? (Ro'yxatdan tanlang yoki yozing):", markup)
             else:
-                send_msg(chat_id, "Telefon raqami xato. Iltimos qaytadan yuboring:")
+                send_msg(chat_id, "Iltimos, telefon raqamingizni tugma orqali yuboring yoki yozing:")
 
         elif step == "position":
             if len(text) > 2:
                 state["data"]["position"] = text
                 state["step"] = "exp"
-                send_msg(chat_id, "Ish tajribangiz haqida qisqacha ma'lumot bering:")
+                send_msg(chat_id, "Ish tajribangiz haqida qisqacha ma'lumot bering:", {"remove_keyboard": True})
             else:
                 send_msg(chat_id, "Lavozim nomini kiriting:")
 
@@ -150,7 +181,12 @@ class BotLogic:
             if len(text) > 5:
                 state["data"]["exp"] = text
                 state["step"] = "cv"
-                send_msg(chat_id, "Rezyume (PDF yoki Rasm) yuboring yoki /skip bosing:")
+                markup = {
+                    "keyboard": [[{"text": "O'tkazib yuborish"}]],
+                    "resize_keyboard": True,
+                    "one_time_keyboard": True
+                }
+                send_msg(chat_id, "Rezyume (PDF yoki Rasm) yuboring yoki 'O'tkazib yuborish' tugmasini bosing:", markup)
             else:
                 send_msg(chat_id, "Tajribangiz haqida batafsilroq yozing:")
 
@@ -164,15 +200,15 @@ class BotLogic:
             elif message.get("photo"):
                 cv_file_id = message["photo"][-1]["file_id"]
                 cv_type = "photo"
-            elif text == "/skip":
+            elif text in ["O'tkazib yuborish", "/skip"]:
                 pass
             else:
-                send_msg(chat_id, "Iltimos, fayl yuboring yoki /skip bosing.")
+                send_msg(chat_id, "Iltimos, fayl yuboring yoki tugmani bosing.")
                 return
 
             # Firebase va HR ga yuborish
             self.finish_and_send(user_id, state["data"], cv_file_id, cv_type)
-            send_msg(chat_id, "✅ <b>Rahmat!</b> Arizangiz HR bo'limiga yuborildi.")
+            send_msg(chat_id, "✅ <b>Rahmat!</b> Arizangiz HR bo'limiga yuborildi.", {"remove_keyboard": True})
             del self.states[user_id]
 
     def finish_and_send(self, user_id, data, file_id, f_type):
