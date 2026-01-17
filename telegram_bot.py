@@ -106,6 +106,15 @@ class BotLogic:
             ["Boshlang'ich sinf", "Administrator"],
             ["Boshqa lavozim"]
         ]
+        self.main_menu = {
+            "keyboard": [
+                [{"text": "🏆 Grant - 2026"}],
+                [{"text": "🗓️ Qabul - 2026"}, {"text": "ℹ️ Umumiy ma'lumot"}],
+                [{"text": "📍 Manzilimiz"}],
+                [{"text": "💼 Bo'sh ish o'rinlari"}, {"text": "📞 Biz bilan bog'lanish"}]
+            ],
+            "resize_keyboard": True
+        }
 
     def handle_update(self, update):
         message = update.get("message")
@@ -117,23 +126,83 @@ class BotLogic:
         contact = message.get("contact")
 
         # Komandalar
-        if text == "/start":
-            self.states[user_id] = {"step": "name", "data": {}}
-            markup = {
-                "keyboard": [[{"text": "Ariza topshirish"}]],
-                "resize_keyboard": True,
-                "one_time_keyboard": True
-            }
-            send_msg(chat_id, "<b>Assalomu alaykum!</b>\n\nAl-Xorazmiy xususiy maktabiga ishga qabul botiga xush kelibsiz.\n\nAriza topshirishni boshlash uchun pastdagi tugmani bosing:", markup)
+        if text == "/start" or text == "🏠 Asosiy menyu":
+            self.states[user_id] = None
+            send_msg(chat_id, "<b>Assalomu alaykum!</b>\n\nAl-Xorazmiy xususiy maktabining rasmiy botiga xush kelibsiz. Kerakli bo'limni tanlang:", self.main_menu)
             return
 
+        # Asosiy Menyu tugmalarini qayta ishlash
+        if not self.states.get(user_id):
+            if text == "🏆 Grant - 2026":
+                msg = (
+                    "<b>🏆 Grant - 2026 dasturi</b>\n\n"
+                    "Iqtidorli o'quvchilarni qo'llab-quvvatlash maqsadida maktabimiz har yili grantlar ajratadi.\n"
+                    "Grantlar o'quvchilarning kirish imtihonlaridagi natijalariga ko'ra beriladi.\n\n"
+                    "Batafsil ma'lumot uchun: @u_gafforov"
+                )
+                send_msg(chat_id, msg, self.main_menu)
+                return
+            
+            elif text == "🗓️ Qabul - 2026":
+                msg = (
+                    "<b>🗓️ 2026-2027 o'quv yili uchun qabul</b>\n\n"
+                    "Qabul jarayonlari quyidagi bosqichlardan iborat:\n"
+                    "1. Onlayn ro'yxatdan o'tish\n"
+                    "2. Kirish imtihonlari (Matematika, Mantiq, Ingliz tili)\n"
+                    "3. Psixologik suhbat\n\n"
+                    "Hozirda 1-11 sinflar uchun qabul davom etmoqda."
+                )
+                send_msg(chat_id, msg, self.main_menu)
+                return
+
+            elif text == "ℹ️ Umumiy ma'lumot":
+                msg = (
+                    "<b>Maktab haqida umumiy ma'lumot</b>\n\n"
+                    "Al-Xorazmiy xususiy maktabi zamonaviy ta'lim texnologiyalari va milliy qadriyatlar uyg'unligini ta'minlaydi.\n"
+                    "Bizning afzalliklarimiz:\n"
+                    "- Chuqurlashtirilgan IT va Matematika\n"
+                    "- Ingliz tilini intensiv o'rganish\n"
+                    "- Shaxmat va robototexnika to'garaklari\n"
+                    "- 3 mahal issiq ovqat va transport xizmati"
+                )
+                send_msg(chat_id, msg, self.main_menu)
+                return
+
+            elif text == "📍 Manzilimiz":
+                msg = (
+                    "<b>📍 Bizning manzil:</b>\n\n"
+                    "Toshkent shahri, Yunusobod tumani, XXX ko'chasi, XX-uy.\n"
+                    "Mo'ljal: XXXXXXXXXX\n\n"
+                    "Ish vaqti: 09:00 - 18:00 (Dush-Shan)"
+                )
+                # Google Maps linkini ham qo'shish mumkin
+                send_msg(chat_id, msg, self.main_menu)
+                return
+
+            elif text == "📞 Biz bilan bog'lanish":
+                msg = (
+                    "<b>📞 Aloqa markazi:</b>\n\n"
+                    "Telefon: +998 90 XXX XX XX\n"
+                    "Telegram: @u_gafforov\n"
+                    "Email: info@alxorazmiy.uz"
+                )
+                send_msg(chat_id, msg, self.main_menu)
+                return
+
+            elif text == "💼 Bo'sh ish o'rinlari":
+                self.states[user_id] = {"step": "name", "data": {}}
+                send_msg(chat_id, "<b>Ishga qabul bo'limi</b>\n\nIltimos, ism va familiyangizni kiriting:", {"remove_keyboard": True})
+                return
+
+        # Ariza topshirish flow'i (states mavjud bo'lsa)
         state = self.states.get(user_id)
         if not state:
-            if text == "Ariza topshirish":
-                self.states[user_id] = {"step": "name", "data": {}}
-                send_msg(chat_id, "Iltimos, ism va familiyangizni kiriting:", {"remove_keyboard": True})
-            else:
-                send_msg(chat_id, "Iltimos, ariza boshlash uchun /start bosing.")
+            send_msg(chat_id, "Iltimos, pastdagi menyudan birini tanlang.", self.main_menu)
+            return
+
+        if text == "❌ Bekor qilish":
+            self.states[user_id] = None
+            send_msg(chat_id, "Ariza topshirish bekor qilindi.", self.main_menu)
             return
 
         step = state["step"]
@@ -143,13 +212,16 @@ class BotLogic:
                 state["data"]["name"] = text
                 state["step"] = "phone"
                 markup = {
-                    "keyboard": [[{"text": "Kontaktni yuborish", "request_contact": True}]],
+                    "keyboard": [
+                        [{"text": "Kontaktni yuborish", "request_contact": True}],
+                        [{"text": "❌ Bekor qilish"}]
+                    ],
                     "resize_keyboard": True,
                     "one_time_keyboard": True
                 }
                 send_msg(chat_id, "Telefon raqamingizni yuboring (tugmani bosing):", markup)
             else:
-                send_msg(chat_id, "Iltimos, ism va familiyangizni to'liq yozing (Masalan: Ali Valiyev):")
+                send_msg(chat_id, "Iltimos, ism va familiyangizni to'liq yozing (Masalan: Ali Valiyev):\n\nBekor qilish uchun '❌ Bekor qilish' tugmasini bosing.")
         
         elif step == "phone":
             phone_val = None
@@ -161,8 +233,10 @@ class BotLogic:
             if phone_val:
                 state["data"]["phone"] = phone_val
                 state["step"] = "position"
+                kb = [[{"text": p} for p in row] for row in self.positions]
+                kb.append([{"text": "❌ Bekor qilish"}])
                 markup = {
-                    "keyboard": [[{"text": p} for p in row] for row in self.positions],
+                    "keyboard": kb,
                     "resize_keyboard": True
                 }
                 send_msg(chat_id, "Qaysi lavozimga topshirmoqchisiz? (Ro'yxatdan tanlang yoki yozing):", markup)
@@ -173,7 +247,11 @@ class BotLogic:
             if len(text) > 2:
                 state["data"]["position"] = text
                 state["step"] = "exp"
-                send_msg(chat_id, "Ish tajribangiz haqida qisqacha ma'lumot bering:", {"remove_keyboard": True})
+                markup = {
+                    "keyboard": [[{"text": "❌ Bekor qilish"}]],
+                    "resize_keyboard": True
+                }
+                send_msg(chat_id, "Ish tajribangiz haqida qisqacha ma'lumot bering:", markup)
             else:
                 send_msg(chat_id, "Lavozim nomini kiriting:")
 
@@ -182,7 +260,10 @@ class BotLogic:
                 state["data"]["exp"] = text
                 state["step"] = "cv"
                 markup = {
-                    "keyboard": [[{"text": "O'tkazib yuborish"}]],
+                    "keyboard": [
+                        [{"text": "O'tkazib yuborish"}],
+                        [{"text": "❌ Bekor qilish"}]
+                    ],
                     "resize_keyboard": True,
                     "one_time_keyboard": True
                 }
@@ -208,7 +289,7 @@ class BotLogic:
 
             # Firebase va HR ga yuborish
             self.finish_and_send(user_id, state["data"], cv_file_id, cv_type)
-            send_msg(chat_id, "✅ <b>Rahmat!</b> Arizangiz HR bo'limiga yuborildi.", {"remove_keyboard": True})
+            send_msg(chat_id, "✅ <b>Rahmat!</b> Arizangiz HR bo'limiga yuborildi.", self.main_menu)
             del self.states[user_id]
 
     def finish_and_send(self, user_id, data, file_id, f_type):
