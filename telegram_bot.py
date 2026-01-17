@@ -19,6 +19,12 @@ def get_env_settings():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     hr_chat_id = os.environ.get("HR_CHAT_ID")
     webhook_url = os.environ.get("WEBHOOK_URL")
+    if not webhook_url:
+        render_external_url = os.environ.get("RENDER_EXTERNAL_URL")
+        render_external_hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+        webhook_url = render_external_url or (f"https://{render_external_hostname}" if render_external_hostname else None)
+    if webhook_url:
+        webhook_url = webhook_url.strip().rstrip("/")
     firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS")
     
     if not token:
@@ -76,6 +82,21 @@ def api_call(method, params=None):
     except Exception as e:
         print(f"API xatolik ({method}): {e}")
         return {"ok": False}
+
+def ensure_webhook():
+    if not WEBHOOK_URL:
+        return
+    desired_url = f"{WEBHOOK_URL}/webhook"
+    info = api_call("getWebhookInfo")
+    current_url = ""
+    if info.get("ok") and isinstance(info.get("result"), dict):
+        current_url = info["result"].get("url") or ""
+    if current_url != desired_url:
+        result = api_call("setWebhook", {"url": desired_url})
+        if result.get("ok"):
+            print(f"Webhook o'rnatildi: {desired_url}")
+        else:
+            print(f"Webhook o'rnatishda xato: {result}")
 
 def send_msg(chat_id, text, reply_markup=None):
     params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
@@ -330,6 +351,7 @@ class BotLogic:
             api_call(method, {"chat_id": HR_CHAT_ID, param_key: file_id, "caption": f"{data['name']} - Rezyume"})
 
 bot_logic = BotLogic()
+ensure_webhook()
 
 # --- Flask Yo'llari ---
 
@@ -348,8 +370,7 @@ def webhook():
     return "OK", 200
 
 if __name__ == "__main__":
-    if WEBHOOK_URL:
-        api_call("setWebhook", {"url": f"{WEBHOOK_URL}/webhook"})
+    ensure_webhook()
     
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
