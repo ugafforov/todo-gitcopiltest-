@@ -36,14 +36,28 @@ def get_env_settings():
 TOKEN, HR_CHAT_ID, WEBHOOK_URL, FIREBASE_CREDS = get_env_settings()
 
 # Firebase initialization
+# User provided Web Config (for reference):
+# apiKey: "AIzaSyDMYfYXtXL2ENNTbrx1wu_Xkpb6rS1SwGo"
+# authDomain: "alxorazmiyishbot.firebaseapp.com"
+# projectId: "alxorazmiyishbot"
+# storageBucket: "alxorazmiyishbot.firebasestorage.app"
+# messagingSenderId: "131888596228"
+# appId: "1:131888596228:web:65dc085d428b6afec43c51"
+
 try:
     creds_dict = json.loads(FIREBASE_CREDS)
     cred = credentials.Certificate(creds_dict)
-    firebase_admin.initialize_app(cred)
+    firebase_admin.initialize_app(cred, {
+        'projectId': 'alxorazmiyishbot',
+        'storageBucket': 'alxorazmiyishbot.firebasestorage.app'
+    })
     db = firestore.client()
+    print("Firebase muvaffaqiyatli bog'landi: alxorazmiyishbot")
 except Exception as e:
     print(f"Firebase initialization error: {e}")
-    sys.exit(1)
+    # Render'da xato bermasligi uchun sys.exit(1) ni olib tashladik, 
+    # lekin db ishlamasligi mumkin
+    db = None
 
 # --- Yordamchi Funksiyalar ---
 
@@ -163,24 +177,28 @@ class BotLogic:
 
     def finish_and_send(self, user_id, data, file_id, f_type):
         # 1. Firestore'ga saqlash
+        saved_to_firebase = False
         try:
-            doc_ref = db.collection("applications").document()
-            doc_ref.set({
-                "user_id": user_id,
-                "name": data["name"],
-                "phone": data["phone"],
-                "position": data["position"],
-                "experience": data["exp"],
-                "cv_file_id": file_id,
-                "cv_type": f_type,
-                "timestamp": firestore.SERVER_TIMESTAMP
-            })
+            if db:
+                doc_ref = db.collection("applications").document()
+                doc_ref.set({
+                    "user_id": user_id,
+                    "name": data["name"],
+                    "phone": data["phone"],
+                    "position": data["position"],
+                    "experience": data["exp"],
+                    "cv_file_id": file_id,
+                    "cv_type": f_type,
+                    "timestamp": firestore.SERVER_TIMESTAMP
+                })
+                saved_to_firebase = True
         except Exception as e:
             print(f"Firestore save error: {e}")
 
         # 2. HR ga Telegram orqali yuborish
+        status_msg = "(Firebase'ga saqlandi)" if saved_to_firebase else "(Firebase'ga saqlanmadi!)"
         report = (
-            f"<b>Yangi Ariza! (Firebase'ga saqlandi)</b>\n\n"
+            f"<b>Yangi Ariza! {status_msg}</b>\n\n"
             f"👤 Nomzod: {data['name']}\n"
             f"📞 Tel: {data['phone']}\n"
             f"💼 Lavozim: {data['position']}\n"
