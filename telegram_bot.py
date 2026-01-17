@@ -137,9 +137,7 @@ class BotLogic:
         return {
             "keyboard": [
                 [{"text": self._label("menu_about", lang)}, {"text": self._label("menu_contact", lang)}],
-                [{"text": self._label("menu_hr", lang)}],
                 [{"text": self._label("menu_jobs", lang)}],
-                [{"text": self._label("menu_talent", lang)}],
                 [{"text": self._label("menu_lang", lang)}],
             ],
             "resize_keyboard": True
@@ -196,6 +194,10 @@ class BotLogic:
             send_msg(chat_id, "Menu:", self._main_menu(lang))
             return
 
+        if action in ["menu_hr", "menu_talent"]:
+            send_msg(chat_id, "Bu bo'lim menyudan olib tashlangan.", self._main_menu(lang))
+            return
+
         # Asosiy Menyu tugmalarini qayta ishlash
         if not self.states.get(user_id):
             if action == "menu_about":
@@ -216,22 +218,9 @@ class BotLogic:
                 send_msg(chat_id, msg, self._main_menu(lang))
                 return
 
-            if action == "menu_hr":
-                msg = (
-                    "<b>HR amaliyoti</b>\n\n"
-                    "Bu bo'lim orqali bo'sh ish o'rinlariga ariza topshirishingiz yoki iste'dodlar zaxirasiga qo'shilishingiz mumkin."
-                )
-                send_msg(chat_id, msg, self._main_menu(lang))
-                return
-
             if action == "menu_jobs":
                 self.states[user_id] = {"step": "name", "data": {}, "mode": "job"}
                 send_msg(chat_id, "<b>Bo'sh ish o'rinlari</b>\n\nIltimos, ism va familiyangizni kiriting:", {"remove_keyboard": True})
-                return
-
-            if action == "menu_talent":
-                self.states[user_id] = {"step": "name", "data": {"position": "Iste'dodlar zaxirasi"}, "mode": "talent"}
-                send_msg(chat_id, "<b>Iste'dodlar zaxirasi</b>\n\nIltimos, ism va familiyangizni kiriting:", {"remove_keyboard": True})
                 return
 
         # Ariza topshirish flow'i (states mavjud bo'lsa)
