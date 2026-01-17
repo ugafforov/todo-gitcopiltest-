@@ -5,12 +5,8 @@ import time
 import urllib.parse
 import urllib.request
 import urllib.error
-from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, firestore
-
-# Flask app
-app = Flask(__name__)
 
 # Konfiguratsiya
 API_URL = "https://api.telegram.org/bot{token}/{method}"
@@ -18,13 +14,6 @@ API_URL = "https://api.telegram.org/bot{token}/{method}"
 def get_env_settings():
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     hr_chat_id = os.environ.get("HR_CHAT_ID")
-    webhook_url = os.environ.get("WEBHOOK_URL")
-    if not webhook_url:
-        render_external_url = os.environ.get("RENDER_EXTERNAL_URL")
-        render_external_hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
-        webhook_url = render_external_url or (f"https://{render_external_hostname}" if render_external_hostname else None)
-    if webhook_url:
-        webhook_url = webhook_url.strip().rstrip("/")
     firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS")
     
     if not token:
@@ -37,9 +26,9 @@ def get_env_settings():
         print("XATO: FIREBASE_CREDENTIALS topilmadi")
         sys.exit(1)
         
-    return token, hr_chat_id, webhook_url, firebase_creds_json
+    return token, hr_chat_id, firebase_creds_json
 
-TOKEN, HR_CHAT_ID, WEBHOOK_URL, FIREBASE_CREDS = get_env_settings()
+TOKEN, HR_CHAT_ID, FIREBASE_CREDS = get_env_settings()
 
 # Firebase initialization
 # User provided Web Config (for reference):
@@ -76,27 +65,13 @@ def api_call(method, params=None):
             req = urllib.request.Request(url, data=data)
         else:
             req = urllib.request.Request(url)
-            
-        with urllib.request.urlopen(req, timeout=10) as response:
+
+        request_timeout = 60 if method == "getUpdates" else 10
+        with urllib.request.urlopen(req, timeout=request_timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as e:
         print(f"API xatolik ({method}): {e}")
         return {"ok": False}
-
-def ensure_webhook():
-    if not WEBHOOK_URL:
-        return
-    desired_url = f"{WEBHOOK_URL}/webhook"
-    info = api_call("getWebhookInfo")
-    current_url = ""
-    if info.get("ok") and isinstance(info.get("result"), dict):
-        current_url = info["result"].get("url") or ""
-    if current_url != desired_url:
-        result = api_call("setWebhook", {"url": desired_url})
-        if result.get("ok"):
-            print(f"Webhook o'rnatildi: {desired_url}")
-        else:
-            print(f"Webhook o'rnatishda xato: {result}")
 
 def send_msg(chat_id, text, reply_markup=None):
     params = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
@@ -351,26 +326,26 @@ class BotLogic:
             api_call(method, {"chat_id": HR_CHAT_ID, param_key: file_id, "caption": f"{data['name']} - Rezyume"})
 
 bot_logic = BotLogic()
-ensure_webhook()
 
-# --- Flask Yo'llari ---
+def run_polling():
+    offset = 0
+    print("Bot ishga tushdi. Yangilanishlar kutilmoqda (polling)...")
+    while True:
+        result = api_call("getUpdates", {"timeout": 30, "offset": offset})
+        if not result.get("ok"):
+            time.sleep(2)
+            continue
 
-@app.route("/", methods=["GET"])
-def home():
-    return "Bot with Firebase is active", 200
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    update = request.get_json()
-    if update:
-        try:
-            bot_logic.handle_update(update)
-        except Exception as e:
-            print(f"Update error: {e}")
-    return "OK", 200
+        updates = result.get("result") or []
+        for upd in updates:
+            try:
+                update_id = upd.get("update_id")
+                if isinstance(update_id, int):
+                    offset = update_id + 1
+                bot_logic.handle_update(upd)
+            except Exception as e:
+                print(f"Update error: {e}")
+        time.sleep(0.2)
 
 if __name__ == "__main__":
-    ensure_webhook()
-    
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    run_polling()
