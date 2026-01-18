@@ -1,4 +1,7 @@
 __pycache__/
 *.py[cod]
-
+.env
+bot.log
+.venv/
+venv/
 *firebase-adminsdk*.json

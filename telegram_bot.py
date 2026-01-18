@@ -187,14 +187,18 @@ class FirestoreDB:
         except Exception as e:
             logger.error(f"Error setting user lang: {e}")
 
-    def get_recent_applications(self, limit=10):
+    def get_recent_applications(self, limit=10, offset=0):
         if not self.db:
             return []
         try:
-            query = self.db.collection("applications").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(limit)
+            # Firestore'da haqiqiy offset qimmat bo'lishi mumkin, 
+            # lekin bu hajmdagi bot uchun limit(offset+limit) qilib keyin slice qilish yetarli
+            query = self.db.collection("applications").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(offset + limit)
             docs = query.stream()
             items = []
-            for doc in docs:
+            for i, doc in enumerate(docs):
+                if i < offset:
+                    continue
                 data = doc.to_dict() or {}
                 items.append({"id": doc.id, **data})
             return items
@@ -297,8 +301,7 @@ class BotLogic:
             "lang_en": {"uz": "🇬🇧 ENG", "en": "🇬🇧 ENG", "ru": "🇬🇧 ENG"},
             "lang_ru": {"uz": "🇷🇺 RUS", "en": "🇷🇺 RUS", "ru": "🇷🇺 RUS"},
             "menu_admin": {"uz": "🔐 Admin", "en": "🔐 Admin", "ru": "🔐 Админ"},
-            "admin_recent_10": {"uz": "📥 Oxirgi 10 ta", "en": "📥 Last 10", "ru": "📥 Последние 10"},
-            "admin_recent_50": {"uz": "📥 Oxirgi 50 ta", "en": "📥 Last 50", "ru": "📥 Последние 50"},
+            "admin_apps": {"uz": "📨 Arizalar", "en": "📨 Applications", "ru": "📨 Заявки"},
             "admin_search": {"uz": "🔎 Lavozim bo‘yicha qidirish", "en": "🔎 Search by position", "ru": "🔎 Поиск по должности"},
             "admin_stats": {"uz": "📊 Statistika (30 kun)", "en": "📊 Statistics (30 days)", "ru": "📊 Статистика (30 дней)"},
             "admin_back": {"uz": "⬅️ Orqaga", "en": "⬅️ Back", "ru": "⬅️ Назад"},
@@ -306,9 +309,9 @@ class BotLogic:
             
             # Messages
             "msg_welcome": {
-                "uz": "<b>Assalomu alaykum!</b>\n\nKerakli bo'limni tanlang:",
-                "en": "<b>Hello!</b>\n\nPlease choose a section:",
-                "ru": "<b>Здравствуйте!</b>\n\nПожалуйста, выберите раздел:"
+                "uz": "<b>Assalomu alaykum!</b> 😊\n\nAl-Xorazmiy xususiy maktabiga xush kelibsiz! 🏫✨\n\nKerakli bo'limni tanlang: 👇",
+                "en": "<b>Hello!</b> 😊\n\nWelcome to Al-Khwarizmi private school! 🏫✨\n\nPlease choose a section: 👇",
+                "ru": "<b>Здравствуйте!</b> 😊\n\nДобро пожаловать в частную школу Аль-Хорезми! 🏫✨\n\nПожалуйста, выберите раздел: 👇"
             },
             "msg_about": {
                 "uz": "<b>🏫 Al-Xorazmiy maktabi haqida:</b>\n\n"
@@ -528,7 +531,7 @@ class BotLogic:
     def _admin_menu(self, lang="uz"):
         return {
             "keyboard": [
-                [{"text": self._label("admin_recent_10", lang)}, {"text": self._label("admin_recent_50", lang)}],
+                [{"text": self._label("admin_apps", lang)}],
                 [{"text": self._label("admin_search", lang)}],
                 [{"text": self._label("admin_stats", lang)}],
                 [{"text": self._label("admin_back", lang)}],
@@ -544,6 +547,12 @@ class BotLogic:
         return None
 
     def handle_update(self, update):
+        # Callback query handling for pagination
+        callback_query = update.get("callback_query")
+        if callback_query:
+            self._handle_callback(callback_query)
+            return
+
         message = update.get("message")
         if not message: return
         
@@ -734,8 +743,7 @@ class BotLogic:
         
         admin_buttons = {
             self._label("admin_back", lang),
-            self._label("admin_recent_10", lang),
-            self._label("admin_recent_50", lang),
+            self._label("admin_apps", lang),
             self._label("admin_search", lang),
             self._label("admin_stats", lang),
         }
@@ -772,13 +780,8 @@ class BotLogic:
             self.api.send_message(chat_id, self._label("msg_welcome", lang), self._main_menu(lang, chat_id))
             return True
 
-        if t == self._label("admin_recent_10", lang):
-            self._send_recent_applications(chat_id, limit=10, lang=lang)
-            self.db.set_user_state(user_id, {"mode": "admin", "step": "menu"})
-            return True
-
-        if t == self._label("admin_recent_50", lang):
-            self._send_recent_applications(chat_id, limit=50, lang=lang)
+        if t == self._label("admin_apps", lang):
+            self._send_recent_applications(chat_id, offset=0, lang=lang)
             self.db.set_user_state(user_id, {"mode": "admin", "step": "menu"})
             return True
 
@@ -836,43 +839,126 @@ class BotLogic:
         if buf:
             self.api.send_message(chat_id, buf, reply_markup)
 
-    def _send_recent_applications(self, chat_id, limit=10, lang="uz"):
+    def _handle_callback(self, cb):
+        cb_id = cb.get("id")
+        user_id = cb.get("from", {}).get("id")
+        chat_id = cb.get("message", {}).get("chat", {}).get("id")
+        msg_id = cb.get("message", {}).get("message_id")
+        data = cb.get("data", "")
+        lang = self.db.get_user_lang(user_id)
+
+        # Answer callback to remove loading state
+        self.api.call("answerCallbackQuery", {"callback_query_id": cb_id})
+
+        if data.startswith("page_"):
+            # Delete the navigation message to avoid clutter
+            self.api.call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+            
+            offset = int(data.split("_")[1])
+            self._send_recent_applications(chat_id, offset=offset, lang=lang)
+
+    def _send_in_chunks(self, chat_id, text, reply_markup=None, max_len=3500, edit_msg_id=None):
+        lines = (text or "").splitlines() or [""]
+        buf = ""
+        
+        if edit_msg_id:
+            params = {
+                "chat_id": chat_id,
+                "message_id": edit_msg_id,
+                "text": text,
+                "parse_mode": "HTML"
+            }
+            if reply_markup:
+                params["reply_markup"] = json.dumps(reply_markup)
+            self.api.call("editMessageText", params)
+            return
+
+        for line in lines:
+            candidate = (buf + "\n" + line) if buf else line
+            if len(candidate) > max_len and buf:
+                self.api.send_message(chat_id, buf, reply_markup)
+                buf = line
+            else:
+                buf = candidate
+        if buf:
+            self.api.send_message(chat_id, buf, reply_markup)
+
+    def _send_recent_applications(self, chat_id, offset=0, limit=10, lang="uz", edit_msg_id=None):
         if not self.db.db:
             self.api.send_message(chat_id, self._label("admin_firebase_error", lang), self._admin_menu(lang))
             return
-        items = self.db.get_recent_applications(limit=limit)
-        if not items:
-            self.api.send_message(chat_id, self._label("admin_no_apps", lang), self._admin_menu(lang))
-            return
-        self._send_applications_list(chat_id, items, title=f"{self._label('admin_recent_10' if limit==10 else 'admin_recent_50', lang)}", lang=lang)
-
-    def _send_applications_list(self, chat_id, items, title, lang="uz"):
-        self.api.send_message(chat_id, f"<b>{title}</b>", self._admin_menu(lang))
         
-        for i, item in enumerate(items, start=1):
-            ts = self._fmt_ts(item.get("timestamp"))
-            name = item.get("name") or "—"
-            phone = item.get("phone") or "—"
-            position = item.get("position") or "—"
-            exp = item.get("experience") or "—"
-            
-            cv_file_id = item.get("cv_file_id")
-            cv_type = item.get("cv_type")
-            
-            caption = (
-                f"{i}. 👤 <b>{name}</b>\n"
-                f"   💼 {position}\n"
-                f"   📞 {phone}\n"
-                f"   📝 {exp}\n"
-                f"   📅 {ts}"
-            )
-            
-            if cv_file_id:
-                method = "sendDocument" if cv_type == "doc" else "sendPhoto"
-                param_key = "document" if cv_type == "doc" else "photo"
-                self.api.call(method, {"chat_id": chat_id, param_key: cv_file_id, "caption": caption, "parse_mode": "HTML"})
+        items = self.db.get_recent_applications(limit=limit, offset=offset)
+        if not items:
+            if offset == 0:
+                self.api.send_message(chat_id, self._label("admin_no_apps", lang), self._admin_menu(lang))
             else:
-                self.api.send_message(chat_id, caption)
+                # If no items on this page (e.g. deleted), go back
+                self._send_recent_applications(chat_id, offset=max(0, offset-limit), limit=limit, lang=lang)
+            return
+
+        # Send header for the batch
+        if offset == 0 and not edit_msg_id:
+            self.api.send_message(chat_id, f"<b>{self._label('admin_apps', lang)}</b>", self._admin_menu(lang))
+
+        # Send each application as a separate detailed message
+        for i, item in enumerate(items, start=offset+1):
+            self._send_single_application(chat_id, item, index=i, lang=lang)
+            time.sleep(0.05) # Small delay to ensure order
+
+        # Pagination navigation message
+        kb = []
+        nav_row = []
+        if offset > 0:
+            nav_row.append({"text": "⬅️ Oldingi", "callback_data": f"page_{max(0, offset-limit)}"})
+        
+        # Check if there might be more (simple heuristic: if we got 'limit' items, assume there's more)
+        if len(items) == limit:
+            nav_row.append({"text": "Keyingi ➡️", "callback_data": f"page_{offset+limit}"})
+        
+        if nav_row:
+            kb.append(nav_row)
+            markup = {"inline_keyboard": kb}
+            self.api.send_message(chat_id, f"<i>Sahifa: {offset//limit + 1}</i>", markup)
+
+    def _send_single_application(self, chat_id, item, index, lang="uz"):
+        ts = self._fmt_ts(item.get("timestamp"))
+        name = item.get("name") or "—"
+        phone = item.get("phone") or "—"
+        pos = item.get("position") or "—"
+        exp = item.get("experience") or "—"
+        cv_file_id = item.get("cv_file_id")
+        cv_type = item.get("cv_type")
+        
+        clean_pos = pos.split(" ", 1)[-1] if " " in pos and any(e in pos for e in "🏢👨‍🏫🧹🛡💡") else pos
+
+        # Format as requested in image
+        caption = (
+            f"{index}. 👤 {name}\n"
+            f"   💼 {clean_pos}\n"
+            f"   📞 {phone}\n"
+            f"   📝 {exp}\n"
+            f"   📅 {ts}"
+        )
+
+        if cv_file_id:
+            method = "sendDocument" if cv_type == "doc" else "sendPhoto"
+            param_key = "document" if cv_type == "doc" else "photo"
+            self.api.call(method, {
+                "chat_id": chat_id, 
+                param_key: cv_file_id, 
+                "caption": caption, 
+                "parse_mode": "HTML"
+            })
+        else:
+            self.api.send_message(chat_id, caption)
+
+    def _send_applications_list(self, chat_id, items, title, lang="uz", edit_msg_id=None, reply_markup=None):
+        # Used for search results - send as detailed messages too
+        self.api.send_message(chat_id, f"<b>{title}</b>", self._admin_menu(lang))
+        for i, item in enumerate(items, start=1):
+            self._send_single_application(chat_id, item, index=i, lang=lang)
+            time.sleep(0.05)
 
     def _send_application_details(self, chat_id, doc_id, lang="uz"):
         if not self.db.db:
@@ -882,55 +968,110 @@ class BotLogic:
         if not item:
             self.api.send_message(chat_id, self._label("admin_no_results", lang), self._admin_menu(lang))
             return
+            
         ts = self._fmt_ts(item.get("timestamp"))
         name = item.get("name") or "—"
         phone = item.get("phone") or "—"
-        position = item.get("position") or "—"
+        pos = item.get("position") or "—"
         exp = item.get("experience") or "—"
-        user_id = item.get("user_id") or "—"
         cv_file_id = item.get("cv_file_id")
         cv_type = item.get("cv_type")
         
-        # Localized fields for details
-        sana_lbl = "🕒 Sana" if lang == "uz" else ("🕒 Date" if lang == "en" else "🕒 Дата")
-        nomzod_lbl = "👤 Nomzod" if lang == "uz" else ("👤 Candidate" if lang == "en" else "👤 Кандидат")
-        tel_lbl = "📞 Tel" if lang == "uz" else ("📞 Phone" if lang == "en" else "📞 Тел")
-        lavozim_lbl = "💼 Lavozim" if lang == "uz" else ("💼 Position" if lang == "en" else "💼 Должность")
-        tajriba_lbl = "📝 Tajriba" if lang == "uz" else ("📝 Experience" if lang == "en" else "📝 Опыт")
-        rez_lbl = "Rezyume" if lang == "uz" else ("Resume" if lang == "en" else "Резюме")
+        # Emojilarni tozalash
+        clean_pos = pos.split(" ", 1)[-1] if " " in pos and any(e in pos for e in "🏢👨‍🏫🧹🛡💡") else pos
+
+        # Localized labels
+        header = "� Arizachi ma'lumotlari" if lang == "uz" else ("� Applicant Details" if lang == "en" else "� Данные заявителя")
+        nomzod_lbl = "Nomzod" if lang == "uz" else ("Candidate" if lang == "en" else "Кандидат")
+        tel_lbl = "Telefon" if lang == "uz" else ("Phone" if lang == "en" else "Телефон")
+        lavozim_lbl = "Lavozim" if lang == "uz" else ("Position" if lang == "en" else "Должность")
+        tajriba_lbl = "Tajriba" if lang == "uz" else ("Experience" if lang == "en" else "Опыт")
+        sana_lbl = "Sana" if lang == "uz" else ("Date" if lang == "en" else "Дата")
 
         report = (
-            f"{self._label('admin_app_details', lang)}\n\n"
-            f"{sana_lbl}: {ts}\n"
-            f"{nomzod_lbl}: {name}\n"
-            f"{tel_lbl}: {phone}\n"
-            f"{lavozim_lbl}: {position}\n"
-            f"{tajriba_lbl}: {exp}\n"
-            f"🆔 User ID: {user_id}\n"
-            f"📄 Doc ID: <code>{item.get('id')}</code>"
+            f"<b>{header}</b>\n"
+            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+            f"👤 <b>{nomzod_lbl}:</b> {name}\n"
+            f"📞 <b>{tel_lbl}:</b> {phone}\n"
+            f"💼 <b>{lavozim_lbl}:</b> {clean_pos}\n"
+            f"📝 <b>{tajriba_lbl}:</b> {exp}\n"
+            f"🕒 <b>{sana_lbl}:</b> {ts}"
         )
-        self.api.send_message(chat_id, report, self._admin_menu(lang))
+
         if cv_file_id:
             method = "sendDocument" if cv_type == "doc" else "sendPhoto"
             param_key = "document" if cv_type == "doc" else "photo"
-            self.api.call(method, {"chat_id": chat_id, param_key: cv_file_id, "caption": f"{name} - {rez_lbl}"})
+            self.api.call(method, {
+                "chat_id": chat_id, 
+                param_key: cv_file_id, 
+                "caption": report, 
+                "parse_mode": "HTML",
+                "reply_markup": json.dumps(self._admin_menu(lang))
+            })
+        else:
+            self.api.send_message(chat_id, report, self._admin_menu(lang))
 
     def _send_stats(self, chat_id, days=30, lang="uz"):
         if not self.db.db:
             self.api.send_message(chat_id, self._label("admin_firebase_error", lang), self._admin_menu(lang))
             return
+        
+        # Loading message
+        wait_msg = "📊 Ma'lumotlar tahlil qilinmoqda, iltimos kuting..." if lang == "uz" else \
+                   ("📊 Analyzing data, please wait..." if lang == "en" else "📊 Данные анализируются, пожалуйста, подождите...")
+        self.api.send_message(chat_id, wait_msg)
+        
         stats = self.db.get_position_stats(days=days, limit=1000)
         total = stats.pop("_total", 0) if stats else 0
-        if not stats:
-            self.api.send_message(chat_id, self._label("admin_no_results", lang), self._admin_menu(lang))
+        
+        if not stats or total == 0:
+            no_data = "❌ Ushbu davr uchun ma'lumotlar mavjud emas." if lang == "uz" else \
+                      ("❌ No data available for this period." if lang == "en" else "❌ Нет данных за этот период.")
+            self.api.send_message(chat_id, no_data, self._admin_menu(lang))
             return
+            
         sorted_items = sorted(stats.items(), key=lambda x: x[1], reverse=True)
-        title = self._label("admin_stats_title", lang).format(days=days)
-        total_lbl = self._label("admin_total", lang)
-        lines = [title, f"{total_lbl}: {total}", ""]
+        
+        # Headers based on language
+        title = f"<b>📊 {days} kunlik tahliliy hisobot</b>" if lang == "uz" else \
+                (f"<b>📊 {days}-day Analytical Report</b>" if lang == "en" else f"<b>📊 Аналитический отчет за {days} дней</b>")
+        
+        summary_lbl = "📈 Umumiy ko'rsatkichlar" if lang == "uz" else ("📈 General Indicators" if lang == "en" else "📈 Общие показатели")
+        total_apps_lbl = "Jami arizalar" if lang == "uz" else ("Total applications" if lang == "en" else "Всего заявок")
+        avg_lbl = "Kunlik o'rtacha" if lang == "uz" else ("Daily average" if lang == "en" else "Среднесуточное")
+        positions_lbl = "💼 Lavozimlar kesimida tahlil" if lang == "uz" else ("💼 Analysis by Positions" if lang == "en" else "💼 Анализ по должностям")
+        
+        avg_daily = round(total / days, 1)
+        
+        report = [
+            title,
+            "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯",
+            f"<b>{summary_lbl}:</b>",
+            f"🔹 {total_apps_lbl}: <b>{total} ta</b>",
+            f"🔹 {avg_lbl}: <b>{avg_daily} ta/kun</b>",
+            "",
+            f"<b>{positions_lbl}:</b>"
+        ]
+        
+        # Progress bar helper
+        def get_progress_bar(percent):
+            filled_length = int(10 * percent / 100)
+            bar = "🟢" * filled_length + "⚪" * (10 - filled_length)
+            return bar
+
         for position, count in sorted_items:
-            lines.append(f"- {position}: {count}")
-        self._send_in_chunks(chat_id, "\n".join(lines), self._admin_menu(lang))
+            percent = (count / total) * 100
+            bar = get_progress_bar(percent)
+            # Emojilarni tozalash (agar bo'lsa)
+            clean_pos = position.split(" ", 1)[-1] if " " in position and any(e in position for e in "🏢👨‍🏫🧹🛡💡") else position
+            report.append(f"\n<b>{clean_pos}</b>")
+            report.append(f"{bar}  {count} ta ({percent:.1f}%)")
+            
+        report.append("\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
+        footer = "📅 Hisobot vaqti: " + datetime.now().strftime("%d.%m.%Y %H:%M")
+        report.append(f"<i>{footer}</i>")
+        
+        self._send_in_chunks(chat_id, "\n".join(report), self._admin_menu(lang))
 
     def _is_valid_name(self, text):
         if not text: return False
