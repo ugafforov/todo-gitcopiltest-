@@ -52,24 +52,51 @@ class TelegramAPI:
         self.base_url = f"https://api.telegram.org/bot{token}/"
         self.session = requests.Session()
 
-    def call(self, method, params=None, files=None, timeout=10):
+    def call(self, method, params=None, files=None, timeout=10, max_retries=2):
         url = self.base_url + method
-        try:
-            if method == "getUpdates":
-                timeout = params.get("timeout", 30) + 5 if params else 35
-            
-            response = self.session.post(url, data=params, files=files, timeout=timeout)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"API HTTP xatolik ({method}): {e}")
+
+        # getUpdates uchun timeout'ni sozlash
+        if method == "getUpdates":
+            timeout = params.get("timeout", 30) + 5 if params else 35
+        # sendMessage va boshqa methodlar uchun timeout'ni oshirish
+        elif method in ["sendMessage", "sendPhoto", "sendDocument", "editMessageText"]:
+            timeout = 20
+
+        # Retry mexanizmi (getUpdates bundan mustasno)
+        retries = max_retries if method != "getUpdates" else 0
+
+        for attempt in range(retries + 1):
             try:
+                response = self.session.post(url, data=params, files=files, timeout=timeout)
+                response.raise_for_status()
                 return response.json()
-            except:
+            except requests.exceptions.Timeout as e:
+                if attempt < retries:
+                    wait_time = 0.5 * (attempt + 1)  # 0.5s, 1s
+                    logger.warning(f"API timeout ({method}), qayta urinilmoqda ({attempt + 1}/{retries + 1})...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"API timeout ({method}) - barcha urinishlar muvaffaqiyatsiz: {e}")
+                    return {"ok": False, "description": f"Timeout: {str(e)}"}
+            except requests.exceptions.HTTPError as e:
+                logger.error(f"API HTTP xatolik ({method}): {e}")
+                try:
+                    return response.json()
+                except:
+                    return {"ok": False, "description": str(e)}
+            except requests.exceptions.ConnectionError as e:
+                if attempt < retries:
+                    wait_time = 0.5 * (attempt + 1)
+                    logger.warning(f"API connection error ({method}), qayta urinilmoqda ({attempt + 1}/{retries + 1})...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"API connection error ({method}): {e}")
+                    return {"ok": False, "description": f"Connection error: {str(e)}"}
+            except Exception as e:
+                logger.error(f"API kutilmagan xatolik ({method}): {e}")
                 return {"ok": False, "description": str(e)}
-        except Exception as e:
-            logger.error(f"API kutilmagan xatolik ({method}): {e}")
-            return {"ok": False, "description": str(e)}
+
+        return {"ok": False, "description": "Unknown error"}
 
     def send_message(self, chat_id, text, reply_markup=None):
         params = {
@@ -79,7 +106,14 @@ class TelegramAPI:
         }
         if reply_markup:
             params["reply_markup"] = json.dumps(reply_markup)
-        return self.call("sendMessage", params)
+
+        result = self.call("sendMessage", params)
+
+        # Xatolikni log qilish (call metodi allaqachon retry qiladi)
+        if not result.get("ok"):
+            logger.error(f"send_message xatolik: {result.get('description')} (chat_id: {chat_id})")
+
+        return result
 
 class FirestoreDB:
     def __init__(self):
