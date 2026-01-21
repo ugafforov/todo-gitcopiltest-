@@ -1081,11 +1081,14 @@ class BotLogic:
         return False
 
     def _fmt_ts(self, ts):
+        """Format timestamp to Uzbekistan timezone (UTC+5)"""
         if not ts:
             return "—"
         try:
             if hasattr(ts, "strftime"):
-                return ts.strftime("%d.%m.%Y %H:%M")
+                # Convert to Uzbekistan time (UTC+5)
+                uz_time = ts + timedelta(hours=5)
+                return uz_time.strftime("%d.%m.%Y %H:%M")
         except Exception:
             pass
         return str(ts)
@@ -1372,7 +1375,9 @@ class BotLogic:
             report.append(f"{bar}  {count} ta ({percent:.1f}%)")
             
         report.append("\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
-        footer = "📅 Hisobot vaqti: " + datetime.now().strftime("%d.%m.%Y %H:%M")
+        # Uzbekistan time (UTC+5)
+        uz_now = datetime.utcnow() + timedelta(hours=5)
+        footer = "📅 Hisobot vaqti: " + uz_now.strftime("%d.%m.%Y %H:%M")
         report.append(f"<i>{footer}</i>")
         
         self._send_in_chunks(chat_id, "\n".join(report), self._admin_menu(lang))
