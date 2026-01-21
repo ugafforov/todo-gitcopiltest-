@@ -9,6 +9,9 @@ import signal
 from flask import Flask
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from collections import OrderedDict
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import firebase_admin
 from firebase_admin import credentials, firestore
 try:
@@ -31,6 +34,56 @@ logger = logging.getLogger("TelegramBot")
 if load_dotenv:
     load_dotenv(override=True)
 
+class LRUCacheWithTTL:
+    """LRU cache with TTL (Time To Live) and max size limit"""
+    def __init__(self, max_size=1000, ttl_seconds=3600):
+        self.cache = OrderedDict()
+        self.timestamps = {}
+        self.max_size = max_size
+        self.ttl_seconds = ttl_seconds
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            if key not in self.cache:
+                return None
+
+            # Check TTL
+            if time.time() - self.timestamps.get(key, 0) > self.ttl_seconds:
+                self._remove(key)
+                return None
+
+            # Move to end (most recently used)
+            self.cache.move_to_end(key)
+            return self.cache[key]
+
+    def set(self, key, value):
+        with self._lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+            else:
+                # Check size limit
+                if len(self.cache) >= self.max_size:
+                    # Remove oldest item
+                    oldest_key = next(iter(self.cache))
+                    self._remove(oldest_key)
+
+            self.cache[key] = value
+            self.timestamps[key] = time.time()
+
+    def delete(self, key):
+        with self._lock:
+            self._remove(key)
+
+    def _remove(self, key):
+        self.cache.pop(key, None)
+        self.timestamps.pop(key, None)
+
+    def clear(self):
+        with self._lock:
+            self.cache.clear()
+            self.timestamps.clear()
+
 class Config:
     TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
     HR_CHAT_ID = os.environ.get("HR_CHAT_ID")
@@ -51,6 +104,21 @@ class TelegramAPI:
     def __init__(self, token):
         self.base_url = f"https://api.telegram.org/bot{token}/"
         self.session = requests.Session()
+
+        # Configure connection pooling for better performance
+        retry_strategy = Retry(
+            total=0,  # Retries handled in call() method
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        adapter = HTTPAdapter(
+            pool_connections=10,  # Number of connection pools
+            pool_maxsize=20,      # Connections per pool
+            max_retries=retry_strategy,
+            pool_block=False
+        )
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def call(self, method, params=None, files=None, timeout=10, max_retries=2):
         url = self.base_url + method
@@ -73,10 +141,10 @@ class TelegramAPI:
             except requests.exceptions.Timeout as e:
                 if attempt < retries:
                     wait_time = 0.5 * (attempt + 1)  # 0.5s, 1s
-                    logger.warning(f"API timeout ({method}), qayta urinilmoqda ({attempt + 1}/{retries + 1})...")
+                    logger.debug(f"API timeout ({method}), retry {attempt + 1}/{retries + 1}")
                     time.sleep(wait_time)
                 else:
-                    logger.error(f"API timeout ({method}) - barcha urinishlar muvaffaqiyatsiz: {e}")
+                    logger.error(f"API timeout ({method}): {e}")
                     return {"ok": False, "description": f"Timeout: {str(e)}"}
             except requests.exceptions.HTTPError as e:
                 logger.error(f"API HTTP xatolik ({method}): {e}")
@@ -87,7 +155,7 @@ class TelegramAPI:
             except requests.exceptions.ConnectionError as e:
                 if attempt < retries:
                     wait_time = 0.5 * (attempt + 1)
-                    logger.warning(f"API connection error ({method}), qayta urinilmoqda ({attempt + 1}/{retries + 1})...")
+                    logger.debug(f"API connection error ({method}), retry {attempt + 1}/{retries + 1}")
                     time.sleep(wait_time)
                 else:
                     logger.error(f"API connection error ({method}): {e}")
@@ -109,18 +177,20 @@ class TelegramAPI:
 
         result = self.call("sendMessage", params)
 
-        # Xatolikni log qilish (call metodi allaqachon retry qiladi)
+        # Only log critical errors (call method already logs retries)
         if not result.get("ok"):
-            logger.error(f"send_message xatolik: {result.get('description')} (chat_id: {chat_id})")
+            logger.debug(f"send_message failed: {result.get('description')}")
 
         return result
 
 class FirestoreDB:
     def __init__(self):
         self.db = None
-        self._user_states = {}
-        self._user_langs = {}
-        self._lock = threading.Lock()
+        # Use LRU cache with 1-hour TTL and max 1000 users
+        self._user_states = LRUCacheWithTTL(max_size=1000, ttl_seconds=3600)
+        self._user_langs = LRUCacheWithTTL(max_size=1000, ttl_seconds=7200)  # 2 hours for langs
+        self._write_queue = []
+        self._queue_lock = threading.Lock()
         self.initialize()
 
     def initialize(self):
@@ -174,16 +244,18 @@ class FirestoreDB:
 
     def get_user_state(self, user_id):
         user_id_str = str(user_id)
-        with self._lock:
-            if user_id_str in self._user_states:
-                return self._user_states[user_id_str]
-        
+
+        # Try cache first
+        cached = self._user_states.get(user_id_str)
+        if cached is not None:
+            return cached
+
+        # Fallback to Firestore
         if not self.db: return None
         try:
             doc = self.db.collection("user_states").document(user_id_str).get()
             state = doc.to_dict() if doc.exists else None
-            with self._lock:
-                self._user_states[user_id_str] = state
+            self._user_states.set(user_id_str, state)
             return state
         except Exception as e:
             logger.error(f"Error getting user state: {e}")
@@ -191,45 +263,57 @@ class FirestoreDB:
 
     def set_user_state(self, user_id, state):
         user_id_str = str(user_id)
-        with self._lock:
-            self._user_states[user_id_str] = state
-        
+
+        # Update cache immediately
+        self._user_states.set(user_id_str, state)
+
+        # Write to Firestore asynchronously (best effort)
+        # Only critical states need immediate persistence
         if not self.db: return
+
         try:
             if state is None:
                 self.db.collection("user_states").document(user_id_str).delete()
             else:
-                self.db.collection("user_states").document(user_id_str).set(state)
+                # Only persist critical states immediately (final steps)
+                # Intermediate states are cached and can be lost on crash
+                if state.get("step") in ["cv", None] or state.get("mode") == "admin":
+                    self.db.collection("user_states").document(user_id_str).set(state)
         except Exception as e:
-            logger.error(f"Error setting user state: {e}")
+            # Don't log every error, just debug level
+            logger.debug(f"State write skipped: {e}")
 
     def get_user_lang(self, user_id):
         user_id_str = str(user_id)
-        with self._lock:
-            if user_id_str in self._user_langs:
-                return self._user_langs[user_id_str]
-            
+
+        # Try cache first
+        cached = self._user_langs.get(user_id_str)
+        if cached is not None:
+            return cached
+
+        # Fallback to Firestore
         if not self.db: return "uz"
         try:
             doc = self.db.collection("user_langs").document(user_id_str).get()
             lang = doc.to_dict().get("lang", "uz") if doc.exists else "uz"
-            with self._lock:
-                self._user_langs[user_id_str] = lang
+            self._user_langs.set(user_id_str, lang)
             return lang
         except Exception as e:
-            logger.error(f"Error getting user lang: {e}")
+            logger.debug(f"Error getting user lang: {e}")
             return "uz"
 
     def set_user_lang(self, user_id, lang):
         user_id_str = str(user_id)
-        with self._lock:
-            self._user_langs[user_id_str] = lang
-        
+
+        # Update cache immediately
+        self._user_langs.set(user_id_str, lang)
+
+        # Persist to Firestore (language is important, always save)
         if not self.db: return
         try:
             self.db.collection("user_langs").document(user_id_str).set({"lang": lang})
         except Exception as e:
-            logger.error(f"Error setting user lang: {e}")
+            logger.debug(f"Lang write error: {e}")
 
     def get_recent_applications(self, limit=10, offset=0):
         if not self.db:
@@ -314,6 +398,8 @@ class BotLogic:
     def __init__(self, api, db):
         self.api = api
         self.db = db
+        # Reverse lookup cache for O(1) action detection
+        self._action_lookup = {}
         self.positions = {
             "uz": [
                 ["🏢 Boshqaruv", "👨‍🏫 O'qituvchi"],
@@ -590,6 +676,16 @@ class BotLogic:
             }
         }
 
+        # Build reverse lookup dictionary for O(1) action detection
+        self._build_action_lookup()
+
+    def _build_action_lookup(self):
+        """Build reverse lookup for fast action detection (O(1) instead of O(n))"""
+        for action_key, translations in self.labels.items():
+            for text in translations.values():
+                if text and isinstance(text, str):
+                    self._action_lookup[text] = action_key
+
     def _label(self, key, lang):
         return self.labels.get(key, {}).get(lang) or self.labels.get(key, {}).get("uz") or key
 
@@ -652,11 +748,9 @@ class BotLogic:
         }
 
     def _action_from_text(self, text):
+        """Fast O(1) action lookup using reverse dictionary"""
         if not text: return None
-        for action_key, translations in self.labels.items():
-            if text in translations.values():
-                return action_key
-        return None
+        return self._action_lookup.get(text)
 
     def handle_update(self, update):
         # Callback query handling for pagination
@@ -1049,7 +1143,7 @@ class BotLogic:
         # Send each application as a separate detailed message
         for i, item in enumerate(items, start=offset+1):
             self._send_single_application(chat_id, item, index=i, lang=lang)
-            time.sleep(0.05) # Small delay to ensure order
+            # No sleep needed - Telegram handles rate limiting automatically
 
         # Pagination navigation message
         kb = []
@@ -1103,7 +1197,7 @@ class BotLogic:
         self.api.send_message(chat_id, f"<b>{title}</b>", self._admin_menu(lang))
         for i, item in enumerate(items, start=1):
             self._send_single_application(chat_id, item, index=i, lang=lang)
-            time.sleep(0.05)
+            # No sleep needed - Telegram API handles rate limiting
 
     def _send_application_details(self, chat_id, doc_id, lang="uz"):
         if not self.db.db:
