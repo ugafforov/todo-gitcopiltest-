@@ -581,6 +581,12 @@ class BotLogic:
                 "uz_cyrl": "Ёпилди.",
                 "en": "Closed.",
                 "ru": "Закрыто."
+            },
+            "msg_stopped": {
+                "uz": "👋 Bot to'xtatildi. Qaytadan boshlash uchun /start buyrug'ini yuboring.",
+                "uz_cyrl": "👋 Бот тўхтатилди. Қайтадан бошлаш учун /start буйруғини юборинг.",
+                "en": "👋 Bot stopped. Send /start to begin again.",
+                "ru": "👋 Бот остановлен. Отправьте /start, чтобы начать снова."
             }
         }
 
@@ -693,6 +699,13 @@ class BotLogic:
 
             # Agar til tanlangan bo'lsa, asosiy menyuni ko'rsatish
             self.api.send_message(chat_id, self._label("msg_welcome", lang), self._main_menu(lang, chat_id))
+            return
+
+        if text == "/stop":
+            self.db.set_user_state(user_id, None)
+            # Klaviaturani olib tashlash
+            remove_kb = {"remove_keyboard": True}
+            self.api.send_message(chat_id, self._label("msg_stopped", lang if lang else "uz"), remove_kb)
             return
         
         # Welcome lang menu'dan til tanlash (creative shaklda)
@@ -1297,6 +1310,7 @@ def run_polling():
     commands = [
         {"command": "start", "description": "Botni ishga tushirish"},
         {"command": "menu", "description": "Asosiy menyu"},
+        {"command": "stop", "description": "Botni to'xtatish"},
         {"command": "admin", "description": "Admin panel (faqat adminlar)"}
     ]
     result = api.call("setMyCommands", {"commands": commands})
