@@ -347,6 +347,18 @@ class FirestoreDB:
             logger.error(f"Error getting application: {e}")
             return None
 
+    def delete_application(self, doc_id):
+        """Delete an application from Firestore"""
+        if not self.db:
+            return False
+        try:
+            self.db.collection("applications").document(str(doc_id)).delete()
+            logger.info(f"Application deleted: {doc_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting application: {e}")
+            return False
+
     def search_applications_by_position(self, query_text, limit=50, scan_limit=300):
         if not self.db:
             return []
@@ -1069,11 +1081,14 @@ class BotLogic:
         return False
 
     def _fmt_ts(self, ts):
+        """Format timestamp to Uzbekistan timezone (UTC+5)"""
         if not ts:
             return "—"
         try:
             if hasattr(ts, "strftime"):
-                return ts.strftime("%d.%m.%Y %H:%M")
+                # Convert to Uzbekistan time (UTC+5)
+                uz_time = ts + timedelta(hours=5)
+                return uz_time.strftime("%d.%m.%Y %H:%M")
         except Exception:
             pass
         return str(ts)
@@ -1092,9 +1107,52 @@ class BotLogic:
         if data.startswith("page_"):
             # Delete the navigation message to avoid clutter
             self.api.call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
-            
+
             offset = int(data.split("_")[1])
             self._send_recent_applications(chat_id, offset=offset, lang=lang)
+
+        elif data.startswith("delete_"):
+            # Handle application deletion
+            doc_id = data.split("_", 1)[1]
+
+            # Check if user is admin (HR)
+            if str(chat_id) != str(Config.HR_CHAT_ID):
+                alert_msg = "❌ Sizda bu amaliyotni bajarish huquqi yo'q" if lang == "uz" else \
+                           ("❌ Сизда бу амалиётни бажариш ҳуқуқи йўқ" if lang == "uz_cyrl" else \
+                           ("❌ You don't have permission" if lang == "en" else "❌ У вас нет разрешения"))
+                self.api.call("answerCallbackQuery", {
+                    "callback_query_id": cb_id,
+                    "text": alert_msg,
+                    "show_alert": True
+                })
+                return
+
+            # Delete from Firestore
+            success = self.db.delete_application(doc_id)
+
+            if success:
+                # Delete the message with the application
+                self.api.call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+
+                # Show success alert
+                success_msg = "✅ Ariza o'chirildi" if lang == "uz" else \
+                             ("✅ Ариза ўчирилди" if lang == "uz_cyrl" else \
+                             ("✅ Application deleted" if lang == "en" else "✅ Заявка удалена"))
+                self.api.call("answerCallbackQuery", {
+                    "callback_query_id": cb_id,
+                    "text": success_msg,
+                    "show_alert": False
+                })
+            else:
+                # Show error alert
+                error_msg = "❌ Xatolik yuz berdi" if lang == "uz" else \
+                           ("❌ Хатолик юз берди" if lang == "uz_cyrl" else \
+                           ("❌ An error occurred" if lang == "en" else "❌ Произошла ошибка"))
+                self.api.call("answerCallbackQuery", {
+                    "callback_query_id": cb_id,
+                    "text": error_msg,
+                    "show_alert": True
+                })
 
     def _send_in_chunks(self, chat_id, text, reply_markup=None, max_len=3500, edit_msg_id=None):
         lines = (text or "").splitlines() or [""]
@@ -1168,7 +1226,8 @@ class BotLogic:
         exp = item.get("experience") or "—"
         cv_file_id = item.get("cv_file_id")
         cv_type = item.get("cv_type")
-        
+        doc_id = item.get("id")
+
         clean_pos = pos.split(" ", 1)[-1] if " " in pos and any(e in pos for e in "🏢👨‍🏫🧹🛡💡") else pos
 
         # Format as requested in image
@@ -1180,17 +1239,26 @@ class BotLogic:
             f"   📅 {ts}"
         )
 
+        # Add inline keyboard with delete button
+        delete_btn_text = "🗑 O'chirish" if lang == "uz" else ("🗑 Ўчириш" if lang == "uz_cyrl" else ("🗑 Delete" if lang == "en" else "🗑 Удалить"))
+        inline_kb = {
+            "inline_keyboard": [
+                [{"text": delete_btn_text, "callback_data": f"delete_{doc_id}"}]
+            ]
+        }
+
         if cv_file_id:
             method = "sendDocument" if cv_type == "doc" else "sendPhoto"
             param_key = "document" if cv_type == "doc" else "photo"
             self.api.call(method, {
-                "chat_id": chat_id, 
-                param_key: cv_file_id, 
-                "caption": caption, 
-                "parse_mode": "HTML"
+                "chat_id": chat_id,
+                param_key: cv_file_id,
+                "caption": caption,
+                "parse_mode": "HTML",
+                "reply_markup": json.dumps(inline_kb)
             })
         else:
-            self.api.send_message(chat_id, caption)
+            self.api.send_message(chat_id, caption, inline_kb)
 
     def _send_applications_list(self, chat_id, items, title, lang="uz", edit_msg_id=None, reply_markup=None):
         # Used for search results - send as detailed messages too
@@ -1307,7 +1375,9 @@ class BotLogic:
             report.append(f"{bar}  {count} ta ({percent:.1f}%)")
             
         report.append("\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
-        footer = "📅 Hisobot vaqti: " + datetime.now().strftime("%d.%m.%Y %H:%M")
+        # Uzbekistan time (UTC+5)
+        uz_now = datetime.utcnow() + timedelta(hours=5)
+        footer = "📅 Hisobot vaqti: " + uz_now.strftime("%d.%m.%Y %H:%M")
         report.append(f"<i>{footer}</i>")
         
         self._send_in_chunks(chat_id, "\n".join(report), self._admin_menu(lang))
@@ -1416,17 +1486,17 @@ def run_polling():
     # Bot description va short description o'rnatish
     description = (
         "🏫 Al-Xorazmiy xususiy maktabiga xush kelibsiz!\n\n"
-        "✨ Bu bot orqali siz:\n"
-        "📚 Maktab haqida to'liq ma'lumot olishingiz\n"
-        "📍 Manzil va bog'lanish ma'lumotlarini ko'rishingiz\n"
-        "💼 Bo'sh ish o'rinlariga ariza topshirishingiz mumkin\n\n"
-        "🌍 4 tilda: O'zbek (Lotin), O'zbek (Kiril), English, Русский\n\n"
-        "Anketani to'ldirish uchun START tugmasini bosing! 👇"
+        "✨ Bu bot orqali:\n"
+        "📚 Maktab haqida ma'lumot\n"
+        "📍 Manzil va aloqa\n"
+        "💼 Bo'sh ish o'rinlariga ariza topshirish\n\n"
+        "🌍 4 tilda xizmat\n\n"
+        "START bosing va tilni tanlang! 👇"
     )
 
     short_description = (
-        "Al-Xorazmiy maktabiga ishga qabul qilish boti. "
-        "Maktab haqida ma'lumot va bo'sh ish o'rinlariga ariza topshirish."
+        "Al-Xorazmiy maktabi ishga qabul boti. "
+        "Ma'lumot va ariza topshirish."
     )
 
     api.call("setMyDescription", {"description": description})
