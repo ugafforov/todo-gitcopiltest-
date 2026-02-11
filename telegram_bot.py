@@ -359,6 +359,70 @@ class FirestoreDB:
             logger.error(f"Error deleting application: {e}")
             return False
 
+    def is_admin(self, user_id):
+        """Check if user is admin"""
+        # HR_CHAT_ID is always admin
+        if str(user_id) == str(Config.HR_CHAT_ID):
+            return True
+
+        if not self.db:
+            return False
+
+        try:
+            doc = self.db.collection("admins").document(str(user_id)).get()
+            return doc.exists
+        except Exception as e:
+            logger.error(f"Error checking admin: {e}")
+            return False
+
+    def add_admin(self, user_id, added_by, username=None, full_name=None):
+        """Add new admin"""
+        if not self.db:
+            return False
+
+        try:
+            self.db.collection("admins").document(str(user_id)).set({
+                "user_id": user_id,
+                "username": username,
+                "full_name": full_name,
+                "added_by": added_by,
+                "added_at": firestore.SERVER_TIMESTAMP
+            })
+            logger.info(f"Admin added: {user_id} by {added_by}")
+            return True
+        except Exception as e:
+            logger.error(f"Error adding admin: {e}")
+            return False
+
+    def remove_admin(self, user_id):
+        """Remove admin"""
+        if not self.db:
+            return False
+
+        try:
+            self.db.collection("admins").document(str(user_id)).delete()
+            logger.info(f"Admin removed: {user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error removing admin: {e}")
+            return False
+
+    def get_all_admins(self):
+        """Get list of all admins"""
+        if not self.db:
+            return []
+
+        try:
+            docs = self.db.collection("admins").stream()
+            admins = []
+            for doc in docs:
+                data = doc.to_dict() or {}
+                admins.append({"id": doc.id, **data})
+            return admins
+        except Exception as e:
+            logger.error(f"Error getting admins: {e}")
+            return []
+
     def search_applications_by_position(self, query_text, limit=50, scan_limit=300):
         if not self.db:
             return []
@@ -452,6 +516,9 @@ class BotLogic:
             "admin_apps": {"uz": "📨 Arizalar", "uz_cyrl": "📨 Аризалар", "en": "📨 Applications", "ru": "📨 Заявки"},
             "admin_search": {"uz": "🔎 Lavozim bo'yicha qidirish", "uz_cyrl": "🔎 Лавозим бўйича қидириш", "en": "🔎 Search by position", "ru": "🔎 Поиск по должности"},
             "admin_stats": {"uz": "📊 Statistika (30 kun)", "uz_cyrl": "📊 Статистика (30 кун)", "en": "📊 Statistics (30 days)", "ru": "📊 Статистика (30 дней)"},
+            "admin_manage": {"uz": "👥 Adminlarni boshqarish", "uz_cyrl": "👥 Админларни бошқариш", "en": "👥 Manage admins", "ru": "👥 Управление админами"},
+            "admin_add": {"uz": "➕ Admin qo'shish", "uz_cyrl": "➕ Админ қўшиш", "en": "➕ Add admin", "ru": "➕ Добавить админа"},
+            "admin_list": {"uz": "📋 Adminlar ro'yxati", "uz_cyrl": "📋 Админлар рўйхати", "en": "📋 Admin list", "ru": "📋 Список админов"},
             "admin_back": {"uz": "⬅️ Orqaga", "uz_cyrl": "⬅️ Орқага", "en": "⬅️ Back", "ru": "⬅️ Назад"},
             "other_pos": {"uz": "💡 Boshqa lavozim", "uz_cyrl": "💡 Бошқа лавозим", "en": "💡 Other position", "ru": "💡 Другая должность"},
             
@@ -680,6 +747,42 @@ class BotLogic:
                 "en": "Closed.",
                 "ru": "Закрыто."
             },
+            "admin_ask_user_id": {
+                "uz": "Foydalanuvchi ID raqamini yuboring yoki foydalanuvchi xabarini forward qiling:",
+                "uz_cyrl": "Фойдаланувчи ID рақамини юборинг ёки фойдаланувчи хабарини forward қилинг:",
+                "en": "Send user ID number or forward a message from the user:",
+                "ru": "Отправьте ID пользователя или перешлите сообщение от пользователя:"
+            },
+            "admin_added_success": {
+                "uz": "✅ Admin muvaffaqiyatli qo'shildi!",
+                "uz_cyrl": "✅ Админ муваффақиятли қўшилди!",
+                "en": "✅ Admin added successfully!",
+                "ru": "✅ Админ успешно добавлен!"
+            },
+            "admin_already_exists": {
+                "uz": "⚠️ Bu foydalanuvchi allaqachon admin.",
+                "uz_cyrl": "⚠️ Бу фойдаланувчи аллақачон админ.",
+                "en": "⚠️ This user is already an admin.",
+                "ru": "⚠️ Этот пользователь уже админ."
+            },
+            "admin_add_error": {
+                "uz": "❌ Admin qo'shishda xatolik yuz berdi.",
+                "uz_cyrl": "❌ Админ қўшишда хатолик юз берди.",
+                "en": "❌ Error adding admin.",
+                "ru": "❌ Ошибка при добавлении админа."
+            },
+            "admin_removed_success": {
+                "uz": "✅ Admin o'chirildi.",
+                "uz_cyrl": "✅ Админ ўчирилди.",
+                "en": "✅ Admin removed.",
+                "ru": "✅ Админ удален."
+            },
+            "admin_invalid_id": {
+                "uz": "❌ Noto'g'ri ID format. Faqat raqam yuboring yoki xabar forward qiling.",
+                "uz_cyrl": "❌ Нотўғри ID формат. Фақат рақам юборинг ёки хабар forward қилинг.",
+                "en": "❌ Invalid ID format. Send only numbers or forward a message.",
+                "ru": "❌ Неверный формат ID. Отправьте только цифры или перешлите сообщение."
+            },
             "msg_stopped": {
                 "uz": "👋 Bot to'xtatildi. Qaytadan boshlash uchun /start buyrug'ini yuboring.",
                 "uz_cyrl": "👋 Бот тўхтатилди. Қайтадан бошлаш учун /start буйруғини юборинг.",
@@ -754,6 +857,17 @@ class BotLogic:
                 [{"text": self._label("admin_apps", lang)}],
                 [{"text": self._label("admin_search", lang)}],
                 [{"text": self._label("admin_stats", lang)}],
+                [{"text": self._label("admin_manage", lang)}],
+                [{"text": self._label("admin_back", lang)}],
+            ],
+            "resize_keyboard": True
+        }
+
+    def _admin_manage_menu(self, lang="uz"):
+        return {
+            "keyboard": [
+                [{"text": self._label("admin_add", lang)}],
+                [{"text": self._label("admin_list", lang)}],
                 [{"text": self._label("admin_back", lang)}],
             ],
             "resize_keyboard": True
@@ -781,9 +895,9 @@ class BotLogic:
         
         lang = self.db.get_user_lang(user_id)
         state = self.db.get_user_state(user_id)
-        is_hr_chat = str(chat_id) == str(Config.HR_CHAT_ID)
+        is_admin = self.db.is_admin(user_id)
 
-        if is_hr_chat:
+        if is_admin:
             admin_handled = self._handle_admin(update, chat_id, user_id, text, state)
             if admin_handled:
                 return
@@ -1008,6 +1122,9 @@ class BotLogic:
             self._label("admin_apps", lang),
             self._label("admin_search", lang),
             self._label("admin_stats", lang),
+            self._label("admin_manage", lang),
+            self._label("admin_add", lang),
+            self._label("admin_list", lang),
         }
         
         # Check for admin menu action
@@ -1057,9 +1174,39 @@ class BotLogic:
             self.db.set_user_state(user_id, {"mode": "admin", "step": "menu"})
             return True
 
+        if t == self._label("admin_manage", lang):
+            self.db.set_user_state(user_id, {"mode": "admin", "step": "manage_menu"})
+            self.api.send_message(chat_id, self._label("admin_panel", lang), self._admin_manage_menu(lang))
+            return True
+
+        if t == self._label("admin_add", lang):
+            self.db.set_user_state(user_id, {"mode": "admin", "step": "add_admin"})
+            self.api.send_message(chat_id, self._label("admin_ask_user_id", lang), self._admin_manage_menu(lang))
+            return True
+
+        if t == self._label("admin_list", lang):
+            self._send_admin_list(chat_id, lang)
+            self.db.set_user_state(user_id, {"mode": "admin", "step": "manage_menu"})
+            return True
+
         if t.startswith("/a "):
             doc_id = t[3:].strip()
             self._send_application_details(chat_id, doc_id, lang)
+            return True
+
+        if t.startswith("/remove_"):
+            admin_id_to_remove = t.split("_", 1)[1]
+            if admin_id_to_remove.isdigit():
+                success = self.db.remove_admin(admin_id_to_remove)
+                if success:
+                    self.api.send_message(chat_id, self._label("admin_removed_success", lang), self._admin_manage_menu(lang))
+                else:
+                    self.api.send_message(chat_id, self._label("admin_add_error", lang), self._admin_manage_menu(lang))
+                self.db.set_user_state(user_id, {"mode": "admin", "step": "manage_menu"})
+            return True
+
+        if state.get("step") == "add_admin":
+            self._handle_add_admin(chat_id, user_id, update, lang)
             return True
 
         if state.get("step") == "search_position":
@@ -1077,6 +1224,97 @@ class BotLogic:
             return True
 
         return False
+
+    def _handle_add_admin(self, chat_id, user_id, update, lang):
+        """Handle adding new admin"""
+        message = update.get("message", {})
+        text = message.get("text", "")
+        forwarded_from = message.get("forward_from")
+
+        new_admin_id = None
+        username = None
+        full_name = None
+
+        # Check if message is forwarded
+        if forwarded_from:
+            new_admin_id = forwarded_from.get("id")
+            username = forwarded_from.get("username")
+            first_name = forwarded_from.get("first_name", "")
+            last_name = forwarded_from.get("last_name", "")
+            full_name = f"{first_name} {last_name}".strip()
+        # Check if text is a user ID number
+        elif text.isdigit():
+            new_admin_id = int(text)
+        else:
+            self.api.send_message(chat_id, self._label("admin_invalid_id", lang), self._admin_manage_menu(lang))
+            self.db.set_user_state(user_id, {"mode": "admin", "step": "manage_menu"})
+            return
+
+        # Check if already admin
+        if self.db.is_admin(new_admin_id):
+            self.api.send_message(chat_id, self._label("admin_already_exists", lang), self._admin_manage_menu(lang))
+            self.db.set_user_state(user_id, {"mode": "admin", "step": "manage_menu"})
+            return
+
+        # Add admin
+        success = self.db.add_admin(new_admin_id, user_id, username, full_name)
+
+        if success:
+            msg = self._label("admin_added_success", lang)
+            if full_name:
+                msg += f"\n\n👤 {full_name}"
+            if username:
+                msg += f"\n@{username}"
+            msg += f"\nID: {new_admin_id}"
+            self.api.send_message(chat_id, msg, self._admin_manage_menu(lang))
+        else:
+            self.api.send_message(chat_id, self._label("admin_add_error", lang), self._admin_manage_menu(lang))
+
+        self.db.set_user_state(user_id, {"mode": "admin", "step": "manage_menu"})
+
+    def _send_admin_list(self, chat_id, lang):
+        """Send list of all admins"""
+        admins = self.db.get_all_admins()
+
+        if not admins and str(chat_id) != str(Config.HR_CHAT_ID):
+            msg = "❌ " + ("Adminlar topilmadi" if lang == "uz" else
+                          ("Админлар топилмади" if lang == "uz_cyrl" else
+                          ("No admins found" if lang == "en" else "Админы не найдены")))
+            self.api.send_message(chat_id, msg, self._admin_manage_menu(lang))
+            return
+
+        title = "👥 " + ("Adminlar ro'yxati" if lang == "uz" else
+                        ("Админлар рўйхати" if lang == "uz_cyrl" else
+                        ("Admin list" if lang == "en" else "Список админов")))
+
+        # Add HR admin (always first)
+        hr_label = "HR (Asosiy)" if lang == "uz" else ("HR (Асосий)" if lang == "uz_cyrl" else ("HR (Main)" if lang == "en" else "HR (Главный)"))
+        msg = f"<b>{title}</b>\n\n1. 🔐 {hr_label}\nID: {Config.HR_CHAT_ID}\n"
+
+        # Add other admins
+        for i, admin in enumerate(admins, start=2):
+            admin_id = admin.get("user_id") or admin.get("id")
+            username = admin.get("username")
+            full_name = admin.get("full_name")
+
+            msg += f"\n{i}. 👤 "
+            if full_name:
+                msg += full_name
+            elif username:
+                msg += f"@{username}"
+            else:
+                msg += "Admin"
+
+            msg += f"\nID: {admin_id}"
+
+            if username and full_name:
+                msg += f"\n@{username}"
+
+            # Add delete button for non-HR admins
+            msg += f"\n🗑 /remove_{admin_id}"
+            msg += "\n"
+
+        self.api.send_message(chat_id, msg, self._admin_manage_menu(lang))
 
     def _fmt_ts(self, ts):
         """Format timestamp to Uzbekistan timezone (UTC+5)"""
@@ -1113,8 +1351,8 @@ class BotLogic:
             # Handle application deletion
             doc_id = data.split("_", 1)[1]
 
-            # Check if user is admin (HR)
-            if str(chat_id) != str(Config.HR_CHAT_ID):
+            # Check if user is admin
+            if not self.db.is_admin(user_id):
                 alert_msg = "❌ Sizda bu amaliyotni bajarish huquqi yo'q" if lang == "uz" else \
                            ("❌ Сизда бу амалиётни бажариш ҳуқуқи йўқ" if lang == "uz_cyrl" else \
                            ("❌ You don't have permission" if lang == "en" else "❌ У вас нет разрешения"))
