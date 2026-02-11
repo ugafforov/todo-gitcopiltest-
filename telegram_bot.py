@@ -567,10 +567,10 @@ class BotLogic:
                 "ru": "Кратко расскажите о своем опыте работы:"
             },
             "msg_ask_cv": {
-                "uz": "Rezyume (PDF yoki Rasm) yuboring yoki 'O'tkazib yuborish' tugmasini bosing:",
-                "uz_cyrl": "Резюме (PDF ёки Расм) юборинг ёки 'Ўтказиб юбориш' тугмасини босинг:",
-                "en": "Send your resume (PDF or Image) or click 'Skip':",
-                "ru": "Отправьте резюме (PDF или фото) или нажмите 'Пропустить':"
+                "uz": "Rezyume (PDF yoki Rasm) yuboring:",
+                "uz_cyrl": "Резюме (PDF ёки Расм) юборинг:",
+                "en": "Send your resume (PDF or Image):",
+                "ru": "Отправьте резюме (PDF или фото):"
             },
             "msg_applied": {
                 "uz": "✅ <b>Arizangiz HR bo'limiga yuborildi.</b> Siz bilan tez orada bog'lanamiz.",
@@ -971,8 +971,8 @@ class BotLogic:
                 state["data"] = data
                 self.db.set_user_state(user_id, state)
                 markup = {
-                    "keyboard": [[{"text": self._label("skip", lang)}], [{"text": self._label("cancel", lang)}]],
-                    "resize_keyboard": True, "one_time_keyboard": True
+                    "keyboard": [[{"text": self._label("cancel", lang)}]],
+                    "resize_keyboard": True
                 }
                 self.api.send_message(chat_id, self._label("msg_ask_cv", lang), markup)
             else:
@@ -981,15 +981,13 @@ class BotLogic:
         elif step == "cv":
             cv_file_id = None
             cv_type = None
-            
+
             if message.get("document"):
                 cv_file_id = message["document"]["file_id"]
                 cv_type = "doc"
             elif message.get("photo"):
                 cv_file_id = message["photo"][-1]["file_id"]
                 cv_type = "photo"
-            elif action == "skip" or text == "/skip":
-                pass
             else:
                 self.api.send_message(chat_id, self._label("msg_invalid_cv", lang))
                 return
